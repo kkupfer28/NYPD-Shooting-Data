@@ -1,0 +1,237 @@
+---
+title: "Covid Data Final Project"
+author: "Kendall"
+date: "2025-11-28"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse) 
+```
+
+## This report will evaluate global Covid 19 data to analyze case trends globally from 2020 to 2023, and how population affects the number of covid cases. The data is from github with links below. 
+# Import Data
+```{r, include = TRUE}
+#read in datasets
+US_cases = read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/refs/heads/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv")
+global_cases = read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/refs/heads/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv")
+US_deaths = read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/refs/heads/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_US.csv")
+global_deaths = read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/refs/heads/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv")
+```
+
+# Clean Data
+## Cleaning up global cases data
+```{r, include = TRUE}
+#remove lat and long columns, pivot date columns to rows
+global_cases = global_cases %>%
+    pivot_longer(
+      cols = -c(`Province/State`, `Country/Region`, Lat, Long),
+      names_to = "date",
+      values_to = "cases",
+      values_transform = list(cases = as.double)
+    ) %>%
+    mutate(
+      date = as.Date(date, format = "%m/%d/%y")
+    ) %>%
+    select(-c(Lat, Long))
+```
+
+## Cleaning up global deaths data
+```{r, include = TRUE}
+#remove lat and long columns, pivot date columns to rows 
+global_deaths = global_deaths  %>%
+    pivot_longer(
+      cols = -c(`Province/State`, `Country/Region`, Lat, Long),
+      names_to = "date",
+      values_to = "deaths",
+      values_transform = list(deaths = as.double)
+    ) %>%
+    mutate(
+      date = as.Date(date, format = "%m/%d/%y")
+    ) %>%
+    select(-c(Lat, Long))
+```
+
+## Combining global cases and global death data
+```{r, include = TRUE}
+global = global_cases %>%
+  full_join(global_deaths) %>%
+  rename(Country_Region = 'Country/Region')
+
+```
+
+## Cleaning up US case data
+```{r, include = TRUE}
+US_cases = US_cases %>%
+  #remove lat and long columns, pivot date columns to rows 
+  pivot_longer(cols = -(UID:Combined_Key),
+               names_to = "date",
+               values_to = "cases") %>%
+  select(Admin2:cases) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+```
+
+## Cleaning up US death data
+```{r, include = TRUE}
+US_deaths = US_deaths %>%
+  #remove lat and long columns, pivot date columns to rows 
+  pivot_longer(cols = -(UID:Population),
+               names_to = "date",
+               values_to = "deaths") %>%
+  select(Admin2:deaths) %>%
+  mutate(date = mdy(date)) %>%
+  select(-c(Lat, Long_))
+
+```
+
+## Combining US cases and death data
+```{r, include = TRUE}
+US = US_cases %>%
+  full_join(US_deaths)
+```
+
+## Add population to global data
+```{r, include = TRUE}
+#read in file that includes population data
+population = read.csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/refs/heads/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv")
+
+#join the population data column to the global dataset
+global = left_join(population, global, by = c("Country_Region"), relationship = "many-to-many")
+global = global %>%
+  #remove unneeded columns
+  select(-c(UID:FIPS)) %>%
+  select(-c(Admin2, Lat, Long_))
+
+```
+
+# Visualizing Data
+## Global Data
+```{r, include = TRUE}
+#Changing the case data to be new cases, instead of cumulative
+global_totals = global %>%
+  arrange(Country_Region, date) %>%
+  group_by(Country_Region) %>%
+  mutate(new_cases = cases - lag(cases, default = 0)) %>%
+  ungroup()
+
+#Summarizing the data across all countries by date
+global_totals = global_totals %>%
+  group_by(date) %>%
+  summarise(total_cases = sum(new_cases)) %>%
+  select(date, total_cases)
+
+#Plotting the number of new cases per day
+ggplot(global_totals, aes(x = date, y = total_cases)) +
+  geom_line(na.rm = TRUE, color = "blue") +
+  labs(
+    title = "Daily COVID-19 Cases",
+    x = "Date",
+    y = "Total Cumulative Cases"
+  ) +
+  theme_minimal()
+
+#Second visualization - bar chart of population and covid cases
+#summarize data by country
+by_country <- global %>%
+     group_by(Country_Region) %>%
+     summarise(
+         Covid_cases = if(all(is.na(cases))) NA else max(cases, na.rm = TRUE),
+        .groups = "drop"
+     )
+
+#Re-add population data to the dataset
+by_country = left_join(population, by_country, by = c("Country_Region")) %>%
+  # Keep only rows where Province_State is blank or NA
+  filter(Province_State == "" | is.na(Province_State))
+
+#Keeping only the top 10 countries in the dataset
+top_countries <- by_country %>%
+  arrange(desc(Covid_cases)) %>%
+  slice_head(n = 10)   # keeps top 10 rows
+
+#Pivot to long format
+plot_data <- top_countries %>%
+  pivot_longer(
+    cols = c(Population, Covid_cases),
+    names_to = "Metric",
+    values_to = "Value"
+  )
+
+#Create a side-by-side bar chart
+ggplot(plot_data, aes(x = Country_Region, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Population and COVID Cases (Top 10 Countries by COVID Cases)",
+    x = "Country",
+    y = "Number",
+    fill = "Metric"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#Create second dataset by keeping only top 10 countries by population
+top_countries_pop <- by_country %>%
+  arrange(desc(Population)) %>%
+  slice_head(n = 10)   # keeps top 10 rows
+
+#Pivot to long format
+plot_data <- top_countries_pop %>%
+  pivot_longer(
+    cols = c(Population, Covid_cases),
+    names_to = "Metric",
+    values_to = "Value"
+  )
+
+#Create side-by-side bar chart
+ggplot(plot_data, aes(x = Country_Region, y = Value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Population and COVID Cases (Top 10 Countries by Population)",
+    x = "Country",
+    y = "Number",
+    fill = "Metric"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+# Analyzing the Data
+## I am going to analyze whether the population of a country can predict the number of Covid cases the country had
+```{r, include = TRUE}
+#create linear model of relationship between cases and population
+model = lm(log(Covid_cases) ~ log(Population), data = by_country)
+#print a summary of the model
+summary(model)
+```
+
+# Modeling the Data
+```{r, include = TRUE}
+#add blank columns to global_totals dataset
+by_country = by_country %>%
+  mutate(pred_log_cases = NA) %>%
+  mutate(pred_cases = NA)
+
+#fill in the blank columns created above with data from the model
+by_country$pred_log_cases = predict(model, newdata = by_country)
+by_country$pred_cases = exp(by_country$pred_log_cases)
+
+#Plot the predicted cases against the actual cases
+ggplot(by_country, aes(x = Covid_cases, y = pred_cases)) +
+  geom_point(color = "red", na.rm = TRUE) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "blue") +
+  scale_x_log10() +
+  scale_y_log10() +
+  labs(title = "Predicted Cases based on Population vs Actual Cases",
+       x = "Actual Cases (log)",
+       y = "Predicted Cases (log)")
+```
+
+# Conclusion
+### This analysis focused on the global Covid19 dataset. The first visualization created was the total number of covid cases and deaths worldwide from 2020 to 2023. The second visualization charted number of covid cases against the population, first for the top 10 countries based on covid cases, and second for the top 10 countries based on population. A model was then created to determine if the population of a country could predict the number of covid cases that country had. This model had a p-value of 2.2e-16 and F-statistic of 114.2, which means population is a statistically significant indicator of covid cases, which logically makes sense. However, there are sources of bias that can affect the efficacy of the model. Each country may report their data differently, for example, looking at the plot of countries with the highest covid cases versus the plot of countries with the highest populations shows there are several high population countries that don't have corresponding high level of cases. This could be accurate, maybe they had more effective pandemic responses, or it could be due to differing reporting requirements. Understanding the bias around how these metrics are measured will be instrumental in how effective the model is. Looking at the first visualization as well, there seems to be a spike in cases in 2022, however this is also when widespread at-home testing became more available, so there was more data to pull from. This is another potential form of bias, as an increase in testing may look like it leads to an increase in cases, but the number of data points available could be influencing the spike as well. In summary, although population does appear to be a good indicator of the number of covid cases, it's important to remember hidden factors and biases that could be affecting the model and take those into account.
+
+``` {r}
+sessionInfo()
+```
