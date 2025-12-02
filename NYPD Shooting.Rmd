@@ -1,0 +1,122 @@
+---
+title: "NYPD Shooting Data"
+author: "Kendall"
+date: "2025-11-12"
+output:
+  html_document:
+    df_print: paged
+classoption: landscape
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+## NYPD Shooting Data
+#Analysis of shooting trends per time of year and area. The data file contains information of every shooting in NY since 2006, including location, date, perpetrator age, victim age, etc.
+
+#Read in and clean the file data
+```{r, echo = TRUE}
+#read in the data file
+url_in <- "https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic" 
+
+file_name <- c("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+
+data <- read.csv(file_name)
+
+#Since this analysis will focus on location and time of the shooting, we will clean up data by removing columns not related to location or time
+data = data[, -c(1,5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21)]
+
+#convert OCCUR_DATE column to date format
+data$OCCUR_DATE = as.Date(data$OCCUR_DATE, format = "%m/%d/%Y")
+#convert OCCUR_TIME column to time format
+library(hms)
+data$OCCUR_TIME = as_hms(data$OCCUR_TIME)
+#print summary of data
+summary(data)
+```
+
+## Data Visualization
+
+```{r, echo=TRUE}
+#plot the number of shootings per month in NY
+library(lubridate)
+#summarize number of shootings by month and year
+sumdate = table(floor_date(data$OCCUR_DATE, "month"))
+#change table to data frame
+sumdatedf = as.data.frame.table(sumdate)
+#add column names
+colnames(sumdatedf) = c("Date", "Occurrences")
+#truncate date off of the date column as we only will look at month and year
+library(lubridate)
+sumdatedf$Date = as.Date(sumdatedf$Date, format = "%Y-%m-%d")
+#plot the data
+plot(sumdatedf$Date, sumdatedf$Occurrences, xlab = "Date", ylab = "Number of Shootings", main = "Number of Shootings per Month in NY")
+lines(sumdatedf$Date, sumdatedf$Occurrences, col = "blue")
+#plot the number of shootings per borough of NY
+sumboro = table(data$BORO)
+barplot(sumboro, xlab = "Borough", ylab = "Number of Shootings", main = "Number of Shootings per Borough in NY since 2006")
+#when exporting to PDF, not all of the y-labels will print
+```
+
+## Data Analysis
+```{r, echo=TRUE}
+#Count shootings per time
+# Count shootings per day
+shootings_by_day <- data %>%
+  group_by(OCCUR_DATE) %>%
+  summarise(num_shootings = n())
+
+# Extract month and day to create a "day-of-year" ignoring the year
+shootings_by_day <- shootings_by_day %>%
+  mutate(
+    month = month(OCCUR_DATE),
+    day = day(OCCUR_DATE),
+    day_of_year = yday(as.Date(paste("2000", month, day, sep = "-")))  # arbitrary non-leap year
+  )
+
+# Summarize across all years for each day-of-year
+shootings_by_doy <- shootings_by_day %>%
+  group_by(day_of_year) %>%
+  summarise(num_shootings = mean(num_shootings))  # average over years
+
+# Fit sinusoidal model
+model_sin <- lm(num_shootings ~ sin(2 * pi * day_of_year / 365) + 
+                                cos(2 * pi * day_of_year / 365),
+                data = shootings_by_doy)
+
+summary(model_sin)
+
+# Add predictions
+shootings_by_doy <- shootings_by_doy %>%
+  mutate(predicted = predict(model_sin))
+
+# Plot actual vs predicted, using day-of-year as x-axis
+ggplot(shootings_by_doy, aes(x = day_of_year)) +
+  geom_point(aes(y = num_shootings), color = "blue", size = 2) +
+  geom_line(aes(y = predicted), color = "red", size = 1) +
+  scale_x_continuous(
+    breaks = c(1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335), 
+    labels = month.abb
+  ) +
+  labs(
+    title = "Average Daily Shootings Across Years (Sinusoidal Model)",
+    x = "Month",
+    y = "Average Number of Shootings"
+  ) +
+  theme_minimal()
+```
+
+## Conclusion
+In this analysis I looked at three things: whether there were any trends in number of shootings depending on the time of year, the number of shootings per borough, and analyzed the number of shootings per season and tried modeling this analysis. 
+
+The first visualization "Number of Shootings per Month in NY" shows how the seasons can affect the number of shootings. My personal bias was that there would be an increase in shootings in the summer months due to hotter weather. There does look like there is a spike in shootings every summer, however more data/analysis would be needed before I can draw a conclusion if it is significant. For example, it would be helpful to have temperature data for each month.
+
+The second visualization, "Number of Shootings per Borough in NY since 2006" shows that the Brooklyn has the largest number of shootings compared to other boroughs. A conclusion could be drawn from this graph that the Brooklyn is the most unsafe borough to live in, but this graph does not take into account population density or shootings per capita, so this graph is biased and can lead to inaccurate conclusions.
+
+The analysis I chose was to summarize the number of shootings per month/date combination. To do this I summarized the data by day, not taking into account the year and summed the number of shootings that occurred per that date each year. My theory was that shootings would increase in hotter months, so I modeled this using a sinusoidal model. I then mapped the data from the model with the actual data. The R-squared value for this model was 0.5103, so there is additional variables at play, however, overall, it does seem that the data follows some sort of sinusoidal trend. 
+
+``` {r}
+sessionInfo()
+```
